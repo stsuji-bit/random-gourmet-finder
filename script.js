@@ -728,16 +728,25 @@ function displayResults(restaurants) {
         const accessInfo = parseAccessInfo(restaurant);
         const budgetInfo = getBudgetInfo(restaurant, selectedTime);
         
+        // ホットペッパーグルメの店舗ページURLを取得
+        const shopUrl = restaurant.urls?.pc || restaurant.urls?.sp || restaurant.url || '';
+        
         console.log(`🏪 レストラン${index + 1}:`, {
             name: restaurant.name,
             selectedTime: selectedTime,
             budgetInfo: budgetInfo,
+            shopUrl: shopUrl,
             restaurantData: restaurant
         });
         
+        // 店舗名をリンクにする（URLがある場合）
+        const restaurantNameHTML = shopUrl 
+            ? `<a href="${shopUrl}" target="_blank" rel="noopener noreferrer" class="restaurant-link">${restaurant.name}</a>`
+            : restaurant.name;
+        
         return `
         <div class="restaurant-card">
-            <div class="restaurant-name">${restaurant.name}</div>
+            <div class="restaurant-name">${restaurantNameHTML}</div>
             <div class="restaurant-info">
                 <div class="info-item">
                     <span>📍</span>
