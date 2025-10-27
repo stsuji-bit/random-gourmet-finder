@@ -48,7 +48,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if (!currentLocation && typeof window.initGoogleMaps === 'function') {
                 console.log('🔄 Google Maps APIは読み込まれていますが、コールバックが呼ばれていません。手動で初期化します。');
                 checkGoogleMapsAPI();
-                initializeApp();
+    initializeApp();
             }
         }
     }, 2000);
@@ -67,7 +67,7 @@ function initializeApp() {
     
     // フォームの送信イベントを設定
     if (searchForm) {
-        searchForm.addEventListener('submit', handleSearch);
+    searchForm.addEventListener('submit', handleSearch);
     }
 }
 
@@ -230,6 +230,48 @@ function convertBudgetToPriceLevel(minBudget, maxBudget) {
     return { minprice, maxprice };
 }
 
+// Google Maps Places APIの結果をアプリの形式に変換
+function convertPlacesToRestaurants(places) {
+    return places.map(place => ({
+        name: place.name,
+        address: place.vicinity || '',
+        lat: place.geometry.location.lat(),
+        lng: place.geometry.location.lng(),
+        place_id: place.place_id || '', // Google Mapリンク用のplace_idを取得
+        rating: place.rating || 0,
+        price_level: place.price_level !== undefined ? place.price_level : null,
+        open: place.opening_hours ? 
+            (place.opening_hours.open_now ? '営業中' : '営業時間外') : '',
+        // 営業時間情報を保存（ランチフィルタリング用）
+        opening_hours: place.opening_hours || null,
+        weekday_text: place.opening_hours && place.opening_hours.weekday_text ? 
+            place.opening_hours.weekday_text : [],
+        // 店舗タイプを保存（ランチフィルタリング用）
+        types: place.types || [],
+        url: place.url || '',
+        urls: {
+            pc: place.url || '',
+            sp: place.url || ''
+        },
+        genre: {
+            name: place.types && place.types.length > 0 ? place.types[0] : '飲食店'
+        },
+        catch: place.name,
+        walk: '',
+        budget: {
+            code: place.price_level !== undefined ? `B00${place.price_level + 1}` : '',
+            name: place.price_level !== undefined ? 
+                ['～500円', '500円～1000円', '1000円～1500円', '1500円～2000円', '2000円～'][place.price_level] : '',
+            average: null
+        },
+        lunch: {
+            code: '',
+            name: '',
+            average: null
+        }
+    }));
+}
+
 // Google Maps Places API (Nearby Search) でレストラン検索
 async function searchRestaurants(params) {
     return new Promise((resolve, reject) => {
@@ -272,88 +314,146 @@ async function searchRestaurants(params) {
             request.maxPriceLevel = params.maxprice;
         }
         
-        // 現在営業中の店舗のみを取得
-        request.openNow = true;
+        // 営業中フィルタは無効化（すべての店舗を対象とする）
+        // request.openNow = true; // 削除されました
         
         console.log('🌐 Google Maps Places API リクエスト:', request);
         
         // PlacesServiceの作成（非表示のdiv要素を使用）
         const service = new google.maps.places.PlacesService(document.createElement('div'));
         
-        // Nearby Searchを実行
-        service.nearbySearch(request, (results, status) => {
-            console.log('📋 Google Maps Places API ステータス:', status);
+        // すべての検索結果を保存する配列
+        let allRestaurants = [];
+        let currentPage = 1;
+        
+        // コールバック関数を定義（ページネーションに対応）
+        const searchCallback = (results, status, pagination) => {
+            console.log(`📋 Google Maps Places API ステータス（${currentPage}ページ目）:`, status);
             
             if (status === google.maps.places.PlacesServiceStatus.OK) {
-                console.log('📋 Google Maps Places APIレスポンス:', results);
+                console.log(`📋 Google Maps Places APIレスポンス（${currentPage}ページ目）:`, results);
                 
                 if (!results || results.length === 0) {
-                    reject(new Error('指定した条件でお店が見つかりませんでした。検索範囲を広げるか、条件を変更してお試しください。'));
-                    return;
-                }
-                
-                // Google Maps Places APIの結果をアプリの形式に変換
-                const restaurants = results.map(place => ({
-                    name: place.name,
-                    address: place.vicinity || '',
-                    lat: place.geometry.location.lat(),
-                    lng: place.geometry.location.lng(),
-                    place_id: place.place_id || '', // Google Mapリンク用のplace_idを取得
-                    rating: place.rating || 0,
-                    price_level: place.price_level !== undefined ? place.price_level : null,
-                    open: place.opening_hours ? 
-                        (place.opening_hours.open_now ? '営業中' : '営業時間外') : '',
-                    url: place.url || '',
-                    urls: {
-                        pc: place.url || '',
-                        sp: place.url || ''
-                    },
-                    genre: {
-                        name: place.types && place.types.length > 0 ? place.types[0] : '飲食店'
-                    },
-                    catch: place.name,
-                    walk: '',
-                    budget: {
-                        code: place.price_level !== undefined ? `B00${place.price_level + 1}` : '',
-                        name: place.price_level !== undefined ? 
-                            ['～500円', '500円～1000円', '1000円～1500円', '1500円～2000円', '2000円～'][place.price_level] : '',
-                        average: null
-                    },
-                    lunch: {
-                        code: '',
-                        name: '',
-                        average: null
+                    if (currentPage === 1) {
+                        reject(new Error('指定した条件でお店が見つかりませんでした。検索範囲を広げるか、条件を変更してお試しください。'));
+                    } else {
+                        console.warn('⚠️ 2ページ目が空でした。1ページ目の結果のみを使用します。');
+                        processAndResolve(allRestaurants, params, resolve, reject);
                     }
-                }));
-                
-                console.log('🏪 変換されたレストラン:', restaurants.length, '件');
-                
-                // フィルタリング（予算のみ）
-                const filteredRestaurants = filterRestaurants(restaurants, params);
-                
-                if (filteredRestaurants.length === 0) {
-                    reject(new Error('指定した条件（予算）に合うお店が見つかりませんでした。予算の範囲を広げてお試しください。'));
                     return;
                 }
                 
-                // ランダムに3件選択
-                resolve(getRandomRestaurants(filteredRestaurants, 3));
+                // 現在のページの結果を変換して配列に追加
+                const pageRestaurants = convertPlacesToRestaurants(results);
+                allRestaurants = allRestaurants.concat(pageRestaurants);
+                console.log(`🏪 ${currentPage}ページ目のレストラン:`, pageRestaurants.length, '件');
+                
+                // next_page_tokenがあるかチェック（Google Maps JavaScript APIではpagination.hasNextPageを使用）
+                if (pagination && pagination.hasNextPage && currentPage === 1) {
+                    console.log('📄 次のページが存在します。2ページ目を取得します...');
+                    currentPage = 2;
+                    
+                    // next_page_tokenが有効になるまで少し待つ（APIの仕様）
+                    setTimeout(() => {
+                        // 2回目のリクエストを実行（pagination.nextPage()を呼び出すと同じコールバックが再度呼ばれる）
+                        pagination.nextPage();
+                    }, 1000); // 1秒待機（next_page_tokenが有効になるまで）
+                } else {
+                    console.log(`📄 ページ取得完了。合計レストラン: ${allRestaurants.length}件`);
+                    // すべての結果に対してフィルタリングとランダム抽出を実行
+                    processAndResolve(allRestaurants, params, resolve, reject);
+                }
                 
             } else if (status === google.maps.places.PlacesServiceStatus.ZERO_RESULTS) {
-                reject(new Error('指定した条件でお店が見つかりませんでした。検索範囲を広げるか、条件を変更してお試しください。'));
+                if (currentPage === 1) {
+                    reject(new Error('指定した条件でお店が見つかりませんでした。検索範囲を広げるか、条件を変更してお試しください。'));
+                } else {
+                    console.warn('⚠️ 2ページ目でエラーが発生しました。1ページ目の結果のみを使用します。');
+                    processAndResolve(allRestaurants, params, resolve, reject);
+                }
             } else if (status === google.maps.places.PlacesServiceStatus.REQUEST_DENIED) {
                 reject(new Error('Google Maps APIのリクエストが拒否されました。APIキーが正しく設定されているか確認してください。'));
             } else if (status === google.maps.places.PlacesServiceStatus.OVER_QUERY_LIMIT) {
                 reject(new Error('Google Maps APIのリクエスト制限に達しました。しばなし時間をおいて再度お試しください。'));
             } else {
-                reject(new Error(`Google Maps API エラー: ${status}`));
+                if (currentPage === 1) {
+                    reject(new Error(`Google Maps API エラー: ${status}`));
+                } else {
+                    console.warn(`⚠️ 2ページ目でエラーが発生しました（${status}）。1ページ目の結果のみを使用します。`);
+                    processAndResolve(allRestaurants, params, resolve, reject);
+                }
             }
-        });
+        };
+        
+        // 1回目のリクエストを実行
+        service.nearbySearch(request, searchCallback);
     });
 }
 
+// フィルタリングとランダム抽出を行い、結果をresolveする
+function processAndResolve(allRestaurants, params, resolve, reject) {
+    console.log('🏪 変換されたレストラン:', allRestaurants.length, '件');
+    
+    // フィルタリング（予算と時間帯）
+    const filteredRestaurants = filterRestaurants(allRestaurants, params);
+    
+    if (filteredRestaurants.length === 0) {
+        const errorMsg = params.timeSlot === 'lunch' 
+            ? '指定した条件（予算・ランチ営業）に合うお店が見つかりませんでした。条件を変更してお試しください。'
+            : '指定した条件（予算）に合うお店が見つかりませんでした。予算の範囲を広げてお試しください。';
+        reject(new Error(errorMsg));
+        return;
+    }
+    
+    // ランダムに3件選択
+    resolve(getRandomRestaurants(filteredRestaurants, 3));
+}
 
-// レストランのフィルタリング（予算のみ、営業時間はAPI側で処理）
+
+// ランチ営業の有無を判定
+function isLunchOpen(restaurant) {
+    // typesに'restaurant'や'cafe'が含まれる場合はランチ営業ありと見なす
+    if (restaurant.types && Array.isArray(restaurant.types)) {
+        const restaurantTypes = restaurant.types.map(t => t.toLowerCase());
+        if (restaurantTypes.includes('restaurant') || restaurantTypes.includes('cafe') || 
+            restaurantTypes.includes('food') || restaurantTypes.includes('meal_takeaway')) {
+            console.log(`🍽️ ランチ営業あり（タイプ）: ${restaurant.name}`);
+            return true;
+        }
+    }
+    
+    // 営業時間文字列をチェック
+    if (restaurant.weekday_text && Array.isArray(restaurant.weekday_text)) {
+        const hoursText = restaurant.weekday_text.join(' ').toLowerCase();
+        
+        // 「ランチ」という単語が含まれているかチェック
+        if (hoursText.includes('ランチ') || hoursText.includes('lunch')) {
+            console.log(`🍽️ ランチ営業あり（キーワード）: ${restaurant.name}`);
+            return true;
+        }
+        
+        // ランチ時間帯（11:00～15:00頃）の時刻が含まれているかチェック
+        const lunchTimePatterns = [
+            /11:\d{2}/,  // 11:00-11:59
+            /12:\d{2}/,  // 12:00-12:59
+            /13:\d{2}/,  // 13:00-13:59
+            /14:\d{2}/,  // 14:00-14:59
+            /15:\d{2}/   // 15:00-15:59
+        ];
+        
+        for (const pattern of lunchTimePatterns) {
+            if (pattern.test(hoursText)) {
+                console.log(`🍽️ ランチ営業あり（時刻）: ${restaurant.name}`);
+                return true;
+            }
+        }
+    }
+    
+    console.log(`🍽️ ランチ営業情報なし: ${restaurant.name}`);
+    return false;
+}
+
+// レストランのフィルタリング（予算と時間帯）
 function filterRestaurants(restaurants, params) {
     let filtered = [...restaurants];
     
@@ -398,124 +498,24 @@ function filterRestaurants(restaurants, params) {
         }
     }
     
+    // ランチ時間帯のフィルタリング
+    if (params.timeSlot === 'lunch') {
+        console.log('🍽️ ランチフィルタリング開始');
+        
+        filtered = filtered.filter(restaurant => {
+            const hasLunch = isLunchOpen(restaurant);
+            if (!hasLunch) {
+                console.log(`❌ ランチ営業なしで除外: ${restaurant.name}`);
+            }
+            return hasLunch;
+        });
+        
+        console.log('🍽️ ランチフィルタリング後:', filtered.length);
+    }
+    
     console.log('✅ 最終フィルタリング結果:', filtered.length);
     
     return filtered;
-}
-
-// これから1時間以内に開店するかどうかを判定
-function isOpeningWithinOneHour(restaurant) {
-    const now = new Date();
-    const currentHour = now.getHours();
-    const currentMinute = now.getMinutes();
-    const currentTime = currentHour * 100 + currentMinute; // HHMM形式
-    
-    const openTime = restaurant.open;
-    
-    if (!openTime) {
-        return false; // 営業時間情報がない場合は判定不能
-    }
-    
-    try {
-        // 営業時間の形式を解析（例: "11:00～23:00" または "11:00-23:00"）
-        const timeMatch = openTime.match(/(\d{1,2}):(\d{2})[～-](\d{1,2}):(\d{2})/);
-        if (timeMatch) {
-            const openHour = parseInt(timeMatch[1]);
-            const openMinute = parseInt(timeMatch[2]);
-            const openTimeMinutes = openHour * 100 + openMinute;
-            
-            // 現在時刻から開店時刻までの時間差を計算（分単位）
-            const currentTotalMinutes = currentHour * 60 + currentMinute;
-            const openTotalMinutes = openHour * 60 + openMinute;
-            
-            let minutesUntilOpen;
-            if (openTotalMinutes >= currentTotalMinutes) {
-                // 今日中に開店する場合
-                minutesUntilOpen = openTotalMinutes - currentTotalMinutes;
-            } else {
-                // 翌日に開店する場合（24時間跨ぎ）
-                minutesUntilOpen = (24 * 60) - currentTotalMinutes + openTotalMinutes;
-            }
-            
-            // 1時間以内（60分以内）に開店するかチェック
-            const willOpenSoon = minutesUntilOpen > 0 && minutesUntilOpen <= 60;
-            
-            console.log(`   🕐 開店予定チェック: ${restaurant.name} - 現在: ${currentHour}:${String(currentMinute).padStart(2, '0')}, 開店: ${openHour}:${String(openMinute).padStart(2, '0')}, 残り${minutesUntilOpen}分, 緩和適用: ${willOpenSoon}`);
-            
-            return willOpenSoon;
-        }
-        
-        return false;
-    } catch (error) {
-        console.warn(`   ⚠️ 開店予定の解析に失敗:`, openTime, error);
-        return false;
-    }
-}
-
-// 現在営業中かどうかを判定
-function isCurrentlyOpen(restaurant) {
-    const now = new Date();
-    const currentHour = now.getHours();
-    const currentMinute = now.getMinutes();
-    const currentTime = currentHour * 100 + currentMinute; // HHMM形式
-    
-    // 曜日の取得（0=日曜日, 1=月曜日, ...）
-    const dayOfWeek = now.getDay();
-    const dayNames = ['日', '月', '火', '水', '木', '金', '土'];
-    const currentDayName = dayNames[dayOfWeek];
-    
-    // 現在時刻の表示
-    const currentTimeString = `${String(currentHour).padStart(2, '0')}:${String(currentMinute).padStart(2, '0')}`;
-    
-    // XMLレスポンスの営業時間フィールド（openタグ）
-    const openTime = restaurant.open;
-    
-    console.log(`🕐 [${restaurant.name}] 営業時間チェック開始`);
-    console.log(`   📅 現在の曜日と時刻: ${currentDayName}曜日 ${currentTimeString} (${currentTime})`);
-    console.log(`   📋 営業時間データ: "${openTime}"`);
-    console.log(`   🔍 営業時間フィールド全体:`, restaurant);
-    
-    if (!openTime) {
-        console.log(`   ✅ 営業時間情報なし → 営業中とみなす`);
-        return true; // 営業時間情報がない場合は営業中とみなす
-    }
-    
-    try {
-        // 営業時間の形式を解析（例: "11:00～23:00" または "11:00-23:00"）
-        const timeMatch = openTime.match(/(\d{1,2}):(\d{2})[～-](\d{1,2}):(\d{2})/);
-        if (timeMatch) {
-            const openHour = parseInt(timeMatch[1]);
-            const openMinute = parseInt(timeMatch[2]);
-            const closeHour = parseInt(timeMatch[3]);
-            const closeMinute = parseInt(timeMatch[4]);
-            
-            const openTimeMinutes = openHour * 100 + openMinute;
-            const closeTimeMinutes = closeHour * 100 + closeMinute;
-            
-            console.log(`   🔍 解析結果: 開店 ${openHour}:${String(openMinute).padStart(2, '0')} (${openTimeMinutes}) ～ 閉店 ${closeHour}:${String(closeMinute).padStart(2, '0')} (${closeTimeMinutes})`);
-            
-            let isOpen = false;
-            
-            // 24時間を跨ぐ場合の処理
-            if (closeTimeMinutes < openTimeMinutes) {
-                isOpen = currentTime >= openTimeMinutes || currentTime <= closeTimeMinutes;
-                console.log(`   🌙 24時間跨ぎ営業: ${currentTime} >= ${openTimeMinutes} || ${currentTime} <= ${closeTimeMinutes} = ${isOpen}`);
-            } else {
-                isOpen = currentTime >= openTimeMinutes && currentTime <= closeTimeMinutes;
-                console.log(`   📊 通常営業: ${currentTime} >= ${openTimeMinutes} && ${currentTime} <= ${closeTimeMinutes} = ${isOpen}`);
-            }
-            
-            console.log(`   ${isOpen ? '✅' : '❌'} 判定結果: ${isOpen ? '営業中' : '営業時間外'}`);
-            return isOpen;
-        }
-        
-        // その他の形式の場合は営業中とみなす
-        console.log(`   ⚠️ 営業時間の形式が認識できませんでした → 営業中とみなす`);
-        return true;
-    } catch (error) {
-        console.warn(`   ⚠️ 営業時間の解析に失敗:`, openTime, error);
-        return true; // 解析に失敗した場合は営業中とみなす
-    }
 }
 
 // ランダムにレストランを選択（重複防止・完全ランダム）
