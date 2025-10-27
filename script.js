@@ -191,8 +191,8 @@ async function handleSearch(event) {
 // 予算金額をGoogle Maps価格レベルに変換（0～4）
 function convertBudgetToPriceLevel(minBudget, maxBudget) {
     // Google Maps Places APIの価格レベル:
-    // 0: 最も安い（～1000円）
-    // 1: 安い（1000～2000円）
+    // 0: 最も安い（～500円）
+    // 1: 安い（500～1000円または1000～2000円）
     // 2: 中程度（2000～4000円）
     // 3: 高い（4000～6000円）
     // 4: 最も高い（6000円～）
@@ -203,29 +203,55 @@ function convertBudgetToPriceLevel(minBudget, maxBudget) {
         return { minprice: null, maxprice: null };
     }
     
-    // 平均予算を計算
-    const avgBudget = (minBudget + maxBudget) / 2;
-    
-    let minprice, maxprice;
-    
-    if (avgBudget <= 1000) {
-        minprice = 0;
-        maxprice = 1;
-    } else if (avgBudget <= 2000) {
-        minprice = 0;
-        maxprice = 2;
-    } else if (avgBudget <= 4000) {
+    // minBudgetを価格レベルに変換
+    let minprice;
+    if (minBudget === 0) {
+        minprice = null; // 下限指定なし
+    } else if (minBudget >= 1 && minBudget <= 2000) {
+        // 要件: 1円～2,000円 → minprice = 1
+        // 1000円の場合も1になる（0または1の条件を満たすため、より厳格な1を採用）
         minprice = 1;
-        maxprice = 3;
-    } else if (avgBudget <= 6000) {
+    } else if (minBudget >= 3000 && minBudget <= 5000) {
+        // 要件: 3,000円～5,000円 → minprice = 2
         minprice = 2;
-        maxprice = 4;
-    } else {
+    } else if (minBudget > 2000 && minBudget < 3000) {
+        // 2,001円～2,999円 → minprice = 2
+        minprice = 2;
+    } else if (minBudget > 5000 && minBudget < 6000) {
+        // 5,001円～5,999円 → minprice = 3
         minprice = 3;
-        maxprice = 4;
+    } else if (minBudget >= 6000 && minBudget <= 10000) {
+        // 6,000円～10,000円 → minprice = 3
+        minprice = 3;
+    } else if (minBudget > 10000) {
+        // 10,000円超 → minprice = 4
+        minprice = 4;
+    } else {
+        // その他の場合は0とする（非常に低額の場合）
+        minprice = 0;
     }
     
-    console.log('💰 予算変換:', { minBudget, maxBudget, avgBudget, minprice, maxprice });
+    // maxBudgetを価格レベルに変換
+    let maxprice;
+    if (maxBudget === 99999) {
+        maxprice = null; // 上限指定なし
+    } else if (maxBudget <= 500) {
+        maxprice = 0; // ～500円 → maxprice = 0
+    } else if (maxBudget <= 1000) {
+        maxprice = 1; // ～1,000円 → maxprice = 1
+    } else if (maxBudget <= 2000) {
+        maxprice = 1; // ～2,000円 → maxprice = 1
+    } else if (maxBudget <= 3000) {
+        maxprice = 2; // ～3,000円 → maxprice = 2
+    } else if (maxBudget <= 4000) {
+        maxprice = 2; // ～4,000円 → maxprice = 2
+    } else if (maxBudget <= 6000) {
+        maxprice = 3; // ～6,000円 → maxprice = 3
+    } else {
+        maxprice = 4; // 6,000円超 → maxprice = 4
+    }
+    
+    console.log('💰 予算変換:', { minBudget, maxBudget, minprice, maxprice });
     
     return { minprice, maxprice };
 }
@@ -462,36 +488,55 @@ function filterRestaurants(restaurants, params) {
         params: params 
     });
     
-    // 厳密な予算フィルタリング（minBudget/maxBudgetによる絞り込み）
+    // 厳密な予算フィルタリング（価格レベルと金額の両方でチェック）
     if (params.minBudget !== undefined && params.maxBudget !== undefined) {
         const minBudget = parseInt(params.minBudget) || 0;
         const maxBudget = parseInt(params.maxBudget) || 99999;
         
         // 指定なしの場合はスキップ
         if (minBudget !== 0 || maxBudget !== 99999) {
-            console.log('💰 厳密な予算フィルタリング:', { minBudget, maxBudget });
+            console.log('💰 厳密な予算フィルタリング:', { minBudget, maxBudget, minprice: params.minprice, maxprice: params.maxprice });
             
             filtered = filtered.filter(restaurant => {
-                // Google Maps Places APIのprice_levelを金額に変換
-                let averageBudget = null;
-                
-                if (restaurant.price_level !== null && restaurant.price_level !== undefined) {
-                    // price_level: 0=～500円, 1=500～1000円, 2=1000～2000円, 3=2000～4000円, 4=4000円～
-                    const priceRanges = [500, 1000, 2000, 4000, 8000];
-                    averageBudget = priceRanges[restaurant.price_level] || null;
+                // 価格レベルがnullの場合は除外（厳密なフィルタリングのため）
+                if (restaurant.price_level === null || restaurant.price_level === undefined) {
+                    console.log(`💰 価格レベル情報なしで除外: ${restaurant.name}`);
+                    return false;
                 }
                 
-                // 平均金額が取得できない場合はスキップ（除外しない）
-                if (averageBudget === null || isNaN(averageBudget)) {
-                    console.log(`💰 予算情報なし（スキップ）: ${restaurant.name}`);
-                    return true; // 情報がない場合は通過
+                // 価格レベルによる厳密なフィルタリング
+                // minpriceが設定されている場合、店舗のprice_levelがminprice未満の場合は除外
+                if (params.minprice !== null && params.minprice !== undefined) {
+                    if (restaurant.price_level < params.minprice) {
+                        console.log(`💰 価格レベル不足で除外: ${restaurant.name} - price_level=${restaurant.price_level} < minprice=${params.minprice}`);
+                        return false;
+                    }
                 }
                 
-                // 厳密な範囲チェック
-                const inRange = averageBudget >= minBudget && averageBudget <= maxBudget;
-                console.log(`💰 厳密予算チェック: ${restaurant.name} - ${averageBudget}円 (範囲: ${minBudget}～${maxBudget}) = ${inRange}`);
+                // maxpriceが設定されている場合、店舗のprice_levelがmaxpriceを超える場合は除外
+                if (params.maxprice !== null && params.maxprice !== undefined) {
+                    if (restaurant.price_level > params.maxprice) {
+                        console.log(`💰 価格レベル超過で除外: ${restaurant.name} - price_level=${restaurant.price_level} > maxprice=${params.maxprice}`);
+                        return false;
+                    }
+                }
                 
-                return inRange;
+                // 追加の金額チェック（価格レベルの範囲が広い場合の補完）
+                // price_level: 0=～500円, 1=500～1000円, 2=1000～2000円, 3=2000～4000円, 4=4000円～
+                const priceRanges = [500, 1000, 2000, 4000, 8000];
+                const averageBudget = priceRanges[restaurant.price_level] || null;
+                
+                if (averageBudget !== null) {
+                    // 厳密な金額範囲チェック
+                    const inRange = averageBudget >= minBudget && averageBudget <= maxBudget;
+                    console.log(`💰 厳密予算チェック: ${restaurant.name} - price_level=${restaurant.price_level}, ${averageBudget}円 (範囲: ${minBudget}～${maxBudget}) = ${inRange}`);
+                    
+                    return inRange;
+                }
+                
+                // 価格レベルチェックは通過したので、金額情報がなくても通過
+                console.log(`💰 価格レベルチェック通過: ${restaurant.name} - price_level=${restaurant.price_level}`);
+                return true;
             });
             
             console.log('💰 厳密な予算フィルタリング後:', filtered.length);
@@ -565,10 +610,22 @@ function getBudgetInfo(restaurant, selectedTime) {
 
     // Google Maps Places APIのprice_levelから予算情報を取得
     if (restaurant.price_level !== null && restaurant.price_level !== undefined) {
-        const priceNames = ['～500円', '500円～1000円', '1000円～2000円', '2000円～4000円', '4000円～'];
-        const priceName = priceNames[restaurant.price_level] || '価格情報なし';
-        console.log('💰 価格レベル:', restaurant.price_level, '-', priceName);
-        return priceName;
+        // 価格レベルの定義と予算の目安
+        const priceInfo = [
+            { level: 0, name: '～500円', range: '～500円' },
+            { level: 1, name: '500円～1000円', range: '500円～1,000円' },
+            { level: 2, name: '1000円～2000円', range: '1,000円～2,000円' },
+            { level: 3, name: '2000円～4000円', range: '2,000円～4,000円' },
+            { level: 4, name: '4000円～', range: '4,000円～' }
+        ];
+        
+        const priceData = priceInfo[restaurant.price_level];
+        if (priceData) {
+            // 価格レベルと予算の目安を分かりやすく表示
+            const displayText = `価格レベル ${priceData.level}: ${priceData.range}`;
+            console.log('💰 価格レベル:', restaurant.price_level, '-', displayText);
+            return displayText;
+        }
     }
 
     // フォールバック: budget.nameがある場合
