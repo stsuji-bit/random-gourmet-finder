@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>周辺グルメランダム提案アプリ</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🍽️ 周辺グルメランダム提案</h1>
+            <p>あなたの現在地から周辺のお店をランダムに3件提案します</p>
+        </header>
+
+        <!-- 現在地取得の許可を促すメッセージ -->
+        <section class="location-section">
+            <div class="location-message" id="locationMessage">
+                <h2>📍 現在地の取得について</h2>
+                <p>お店を検索するために、あなたの現在地（緯度・経度）を取得します。</p>
+                <p>ブラウザから位置情報の許可を求められた場合は、「許可」を選択してください。</p>
+                <div class="location-status" id="locationStatus">
+                    <span class="status-text">位置情報の取得を待機中...</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- 検索フォーム -->
+        <section class="search-section">
+            <h2>🔍 検索条件</h2>
+            <form id="searchForm" class="search-form">
+                <div class="form-group">
+                    <label for="keyword">キーワード（料理ジャンルなど）:</label>
+                    <input type="text" id="keyword" name="keyword" placeholder="例: ラーメン、イタリアン、カフェ">
+                </div>
+
+                <div class="form-group budget-range-group">
+                    <label>予算:</label>
+                    <div class="budget-inputs">
+                        <select id="minBudget" name="minBudget" class="budget-select">
+                            <option value="0">指定なし</option>
+                            <option value="500">500円</option>
+                            <option value="1000">1000円</option>
+                            <option value="2000">2000円</option>
+                            <option value="3000">3000円</option>
+                            <option value="4000">4000円</option>
+                            <option value="5000">5000円</option>
+                            <option value="6000">6000円</option>
+                            <option value="7000">7000円</option>
+                            <option value="8000">8000円</option>
+                            <option value="9000">9000円</option>
+                            <option value="10000">10000円</option>
+                            <option value="11000">11000円</option>
+                            <option value="12000">12000円</option>
+                            <option value="13000">13000円</option>
+                            <option value="14000">14000円</option>
+                            <option value="15000">15000円</option>
+                        </select>
+                        <span class="budget-separator">～</span>
+                        <select id="maxBudget" name="maxBudget" class="budget-select">
+                            <option value="99999">指定なし</option>
+                            <option value="500">500円</option>
+                            <option value="1000">1000円</option>
+                            <option value="2000">2000円</option>
+                            <option value="3000">3000円</option>
+                            <option value="4000">4000円</option>
+                            <option value="5000">5000円</option>
+                            <option value="6000">6000円</option>
+                            <option value="7000">7000円</option>
+                            <option value="8000">8000円</option>
+                            <option value="9000">9000円</option>
+                            <option value="10000">10000円</option>
+                            <option value="11000">11000円</option>
+                            <option value="12000">12000円</option>
+                            <option value="13000">13000円</option>
+                            <option value="14000">14000円</option>
+                            <option value="15000">15000円</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="range">検索範囲:</label>
+                    <select id="range" name="range">
+                        <option value="1">300m</option>
+                        <option value="2">500m</option>
+                        <option value="3">1000m（1km）</option>
+                        <option value="4">2000m（2km）</option>
+                        <option value="5">3000m（3km）</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="timeSlot">利用時間帯:</label>
+                    <select id="timeSlot" name="timeSlot">
+                        <option value="lunch">ランチ</option>
+                        <option value="dinner" selected>ディナー</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <button type="submit" id="searchButton" class="search-button" disabled>
+                        🎲 ランダム提案
+                    </button>
+                </div>
+            </form>
+        </section>
+
+        <!-- 結果表示エリア -->
+        <section class="results-section">
+            <h2>🍴 提案結果</h2>
+            <div id="resultsContainer" class="results-container">
+                <div class="no-results">
+                    <p>「ランダム提案」ボタンを押して、周辺のお店を検索してください。</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- ローディング表示 -->
+        <div id="loading" class="loading hidden">
+            <div class="loading-spinner"></div>
+            <p>お店を検索中...</p>
+        </div>
+
+        <!-- エラーメッセージ -->
+        <div id="errorMessage" class="error-message hidden">
+            <h3>⚠️ エラーが発生しました</h3>
+            <p id="errorText"></p>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
