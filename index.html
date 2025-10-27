@@ -5,6 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>周辺グルメランダム提案アプリ</title>
     <link rel="stylesheet" href="style.css">
+    <!-- アプリケーションスクリプト（先に読み込んでinitGoogleMaps関数を定義） -->
+    <script src="script.js"></script>
+    <!-- Google Maps JavaScript API with Places Library -->
+    <script src="https://maps.googleapis.com/maps/api/js?libraries=places&key=AIzaSyCKtWVKddSgvaYarqqfXpJXBnBFeVhP9JM&callback=initGoogleMaps" async defer></script>
 </head>
 <body>
     <div class="container">
@@ -128,7 +132,5 @@
             <p id="errorText"></p>
         </div>
     </div>
-
-    <script src="script.js"></script>
 </body>
 </html>

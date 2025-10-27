@@ -1,28 +1,74 @@
 // グローバル変数
 let currentLocation = null;
-let apiKey = 'f2cac3377d49d495'; // ホットペッパーグルメAPIのキーを設定してください
 
-// DOM要素の取得
-const locationStatus = document.getElementById('locationStatus');
-const searchButton = document.getElementById('searchButton');
-const searchForm = document.getElementById('searchForm');
-const resultsContainer = document.getElementById('resultsContainer');
-const loading = document.getElementById('loading');
-const errorMessage = document.getElementById('errorMessage');
-const errorText = document.getElementById('errorText');
+// DOM要素の変数（後で初期化）
+let locationStatus, searchButton, searchForm, resultsContainer, loading, errorMessage, errorText;
 
-// ページ読み込み時の初期化
+// Google Maps APIの読み込み完了時のコールバック
+// この関数はGoogle Maps APIが読み込まれる前に定義される必要がある
+// グローバルスコープで直接定義することで、callbackパラメータから呼び出せるようにする
+function initGoogleMaps() {
+    console.log('✅ Google Maps JavaScript APIが読み込まれました');
+    
+    // DOM要素の取得（DOMContentLoadedが完了していることを確認）
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeDOMElements();
+            checkGoogleMapsAPI();
+            initializeApp();
+        });
+    } else {
+        // DOMContentLoadedが既に完了している場合
+        initializeDOMElements();
+        checkGoogleMapsAPI();
+        initializeApp();
+    }
+}
+
+// DOM要素の初期化
+function initializeDOMElements() {
+    locationStatus = document.getElementById('locationStatus');
+    searchButton = document.getElementById('searchButton');
+    searchForm = document.getElementById('searchForm');
+    resultsContainer = document.getElementById('resultsContainer');
+    loading = document.getElementById('loading');
+    errorMessage = document.getElementById('errorMessage');
+    errorText = document.getElementById('errorText');
+}
+
+// ページ読み込み時の初期化（APIがすでに読み込まれている場合のフォールバック）
 document.addEventListener('DOMContentLoaded', function() {
-    initializeApp();
+    // DOM要素の初期化
+    initializeDOMElements();
+    
+    // Google Maps APIがすでに読み込まれている場合のフォールバック
+    setTimeout(() => {
+        if (typeof google !== 'undefined' && google.maps && google.maps.places) {
+            // APIがすでに読み込まれていて、initGoogleMapsが呼ばれていない場合
+            if (!currentLocation && typeof window.initGoogleMaps === 'function') {
+                console.log('🔄 Google Maps APIは読み込まれていますが、コールバックが呼ばれていません。手動で初期化します。');
+                checkGoogleMapsAPI();
+                initializeApp();
+            }
+        }
+    }, 2000);
 });
 
 // アプリの初期化
 function initializeApp() {
+    // DOM要素が初期化されていることを確認
+    if (!locationStatus || !searchButton || !searchForm || !resultsContainer || !loading || !errorMessage || !errorText) {
+        console.warn('⚠️ DOM要素が初期化されていません。再試行します...');
+        initializeDOMElements();
+    }
+    
     // 位置情報の取得を試行
     getCurrentLocation();
     
     // フォームの送信イベントを設定
-    searchForm.addEventListener('submit', handleSearch);
+    if (searchForm) {
+        searchForm.addEventListener('submit', handleSearch);
+    }
 }
 
 // 現在地の取得
@@ -113,19 +159,20 @@ async function handleSearch(event) {
         const minBudget = parseInt(formData.get('minBudget')) || 0;
         const maxBudget = parseInt(formData.get('maxBudget')) || 99999;
         
-        // 予算コードの自動決定
-        const budgetCode = determineBudgetCode(minBudget, maxBudget);
+        // 予算をGoogle Maps価格レベルに変換
+        const priceLevel = convertBudgetToPriceLevel(minBudget, maxBudget);
         
         const searchParams = {
             keyword: formData.get('keyword') || '',
-            budget: budgetCode,
             minBudget: minBudget,
             maxBudget: maxBudget,
+            minprice: priceLevel.minprice,
+            maxprice: priceLevel.maxprice,
             range: formData.get('range') || '3',
             timeSlot: formData.get('timeSlot') || 'dinner'
         };
         
-        console.log('💰 予算設定:', { minBudget, maxBudget, budgetCode });
+        console.log('💰 予算設定:', { minBudget, maxBudget, priceLevel });
         
         // API呼び出し
         const restaurants = await searchRestaurants(searchParams);
@@ -141,215 +188,172 @@ async function handleSearch(event) {
     }
 }
 
-// 予算コードの自動決定関数
-function determineBudgetCode(minBudget, maxBudget) {
-    // ホットペッパーグルメAPIの予算コード定義
-    const budgetCodes = [
-        { code: 'B001', min: 0, max: 500, name: '～500円' },
-        { code: 'B002', min: 500, max: 1000, name: '500円～1000円' },
-        { code: 'B003', min: 1000, max: 1500, name: '1000円～1500円' },
-        { code: 'B004', min: 1500, max: 2000, name: '1500円～2000円' },
-        { code: 'B005', min: 2000, max: 3000, name: '2000円～3000円' },
-        { code: 'B006', min: 3000, max: 4000, name: '3000円～4000円' },
-        { code: 'B007', min: 4000, max: 5000, name: '4000円～5000円' },
-        { code: 'B008', min: 5000, max: 99999, name: '5000円～' }
-    ];
+// 予算金額をGoogle Maps価格レベルに変換（0～4）
+function convertBudgetToPriceLevel(minBudget, maxBudget) {
+    // Google Maps Places APIの価格レベル:
+    // 0: 最も安い（～1000円）
+    // 1: 安い（1000～2000円）
+    // 2: 中程度（2000～4000円）
+    // 3: 高い（4000～6000円）
+    // 4: 最も高い（6000円～）
     
-    // 指定なしの場合は空文字を返す
+    // 指定なしの場合はnullを返す
     if (minBudget === 0 && maxBudget === 99999) {
         console.log('💰 予算指定なし');
-        return '';
+        return { minprice: null, maxprice: null };
     }
     
-    // ユーザーの指定範囲を含む最も広い予算コードを探す
-    let bestMatch = null;
-    let maxCoverage = 0;
+    // 平均予算を計算
+    const avgBudget = (minBudget + maxBudget) / 2;
     
-    for (const budgetCode of budgetCodes) {
-        // ユーザーの指定範囲と予算コードの範囲の重複を計算
-        const overlapMin = Math.max(minBudget, budgetCode.min);
-        const overlapMax = Math.min(maxBudget, budgetCode.max);
-        
-        if (overlapMin <= overlapMax) {
-            // 重複がある場合、その範囲の広さを計算
-            const coverage = overlapMax - overlapMin;
-            
-            // 最も広い範囲をカバーする予算コードを選択
-            if (coverage > maxCoverage) {
-                maxCoverage = coverage;
-                bestMatch = budgetCode;
-            }
-        }
-    }
+    let minprice, maxprice;
     
-    // 最も広くカバーする予算コードを返す（見つからない場合は最も広い範囲のコード）
-    if (bestMatch) {
-        console.log('💰 選択された予算コード:', bestMatch.code, '-', bestMatch.name);
-        return bestMatch.code;
+    if (avgBudget <= 1000) {
+        minprice = 0;
+        maxprice = 1;
+    } else if (avgBudget <= 2000) {
+        minprice = 0;
+        maxprice = 2;
+    } else if (avgBudget <= 4000) {
+        minprice = 1;
+        maxprice = 3;
+    } else if (avgBudget <= 6000) {
+        minprice = 2;
+        maxprice = 4;
     } else {
-        // 見つからない場合は最も広い範囲のコードを返す
-        const widestCode = budgetCodes[budgetCodes.length - 1];
-        console.log('💰 予算コードが見つからないため、最も広い範囲を使用:', widestCode.code);
-        return widestCode.code;
+        minprice = 3;
+        maxprice = 4;
     }
+    
+    console.log('💰 予算変換:', { minBudget, maxBudget, avgBudget, minprice, maxprice });
+    
+    return { minprice, maxprice };
 }
 
-// ホットペッパーグルメAPIでレストラン検索（AllOriginsプロキシ経由）
+// Google Maps Places API (Nearby Search) でレストラン検索
 async function searchRestaurants(params) {
-    const baseUrl = 'https://webservice.recruit.co.jp/hotpepper/gourmet/v1/';
-    
-    // APIパラメータの構築
-    const maxCount = 100; // APIの最大取得件数
-    const apiParams = new URLSearchParams({
-        key: apiKey,
-        lat: currentLocation.lat,
-        lng: currentLocation.lng,
-        range: params.range,
-        count: maxCount, // 最大件数で取得してランダム選択
-        format: 'json'
+    return new Promise((resolve, reject) => {
+        // Google Maps JavaScript APIが読み込まれているか確認
+        if (typeof google === 'undefined' || !google.maps || !google.maps.places) {
+            reject(new Error('Google Maps JavaScript APIが読み込まれていません。ページを再読み込みしてください。'));
+            return;
+        }
+        
+        // 距離をメートルに変換
+        const rangeMap = {
+            '1': 300,   // 300m
+            '2': 500,   // 500m
+            '3': 1000,  // 1km
+            '4': 2000,  // 2km
+            '5': 3000   // 3km
+        };
+        const radius = rangeMap[params.range] || 1000;
+        
+        // 現在位置オブジェクトを作成
+        const location = new google.maps.LatLng(currentLocation.lat, currentLocation.lng);
+        
+        // PlacesServiceリクエストの設定
+        const request = {
+            location: location,
+            radius: radius,
+            type: 'restaurant'
+        };
+        
+        // キーワードの追加
+        if (params.keyword && params.keyword.trim()) {
+            request.keyword = params.keyword.trim();
+        }
+        
+        // 価格レベルの追加（Google Maps APIの正しいパラメータ名を使用）
+        if (params.minprice !== null && params.minprice !== undefined) {
+            request.minPriceLevel = params.minprice;
+        }
+        if (params.maxprice !== null && params.maxprice !== undefined) {
+            request.maxPriceLevel = params.maxprice;
+        }
+        
+        // 現在営業中の店舗のみを取得
+        request.openNow = true;
+        
+        console.log('🌐 Google Maps Places API リクエスト:', request);
+        
+        // PlacesServiceの作成（非表示のdiv要素を使用）
+        const service = new google.maps.places.PlacesService(document.createElement('div'));
+        
+        // Nearby Searchを実行
+        service.nearbySearch(request, (results, status) => {
+            console.log('📋 Google Maps Places API ステータス:', status);
+            
+            if (status === google.maps.places.PlacesServiceStatus.OK) {
+                console.log('📋 Google Maps Places APIレスポンス:', results);
+                
+                if (!results || results.length === 0) {
+                    reject(new Error('指定した条件でお店が見つかりませんでした。検索範囲を広げるか、条件を変更してお試しください。'));
+                    return;
+                }
+                
+                // Google Maps Places APIの結果をアプリの形式に変換
+                const restaurants = results.map(place => ({
+                    name: place.name,
+                    address: place.vicinity || '',
+                    lat: place.geometry.location.lat(),
+                    lng: place.geometry.location.lng(),
+                    place_id: place.place_id || '', // Google Mapリンク用のplace_idを取得
+                    rating: place.rating || 0,
+                    price_level: place.price_level !== undefined ? place.price_level : null,
+                    open: place.opening_hours ? 
+                        (place.opening_hours.open_now ? '営業中' : '営業時間外') : '',
+                    url: place.url || '',
+                    urls: {
+                        pc: place.url || '',
+                        sp: place.url || ''
+                    },
+                    genre: {
+                        name: place.types && place.types.length > 0 ? place.types[0] : '飲食店'
+                    },
+                    catch: place.name,
+                    walk: '',
+                    budget: {
+                        code: place.price_level !== undefined ? `B00${place.price_level + 1}` : '',
+                        name: place.price_level !== undefined ? 
+                            ['～500円', '500円～1000円', '1000円～1500円', '1500円～2000円', '2000円～'][place.price_level] : '',
+                        average: null
+                    },
+                    lunch: {
+                        code: '',
+                        name: '',
+                        average: null
+                    }
+                }));
+                
+                console.log('🏪 変換されたレストラン:', restaurants.length, '件');
+                
+                // フィルタリング（予算のみ）
+                const filteredRestaurants = filterRestaurants(restaurants, params);
+                
+                if (filteredRestaurants.length === 0) {
+                    reject(new Error('指定した条件（予算）に合うお店が見つかりませんでした。予算の範囲を広げてお試しください。'));
+                    return;
+                }
+                
+                // ランダムに3件選択
+                resolve(getRandomRestaurants(filteredRestaurants, 3));
+                
+            } else if (status === google.maps.places.PlacesServiceStatus.ZERO_RESULTS) {
+                reject(new Error('指定した条件でお店が見つかりませんでした。検索範囲を広げるか、条件を変更してお試しください。'));
+            } else if (status === google.maps.places.PlacesServiceStatus.REQUEST_DENIED) {
+                reject(new Error('Google Maps APIのリクエストが拒否されました。APIキーが正しく設定されているか確認してください。'));
+            } else if (status === google.maps.places.PlacesServiceStatus.OVER_QUERY_LIMIT) {
+                reject(new Error('Google Maps APIのリクエスト制限に達しました。しばなし時間をおいて再度お試しください。'));
+            } else {
+                reject(new Error(`Google Maps API エラー: ${status}`));
+            }
+        });
     });
-    
-    // 安全なstartパラメータの計算（まず全件数を取得してから計算）
-    // 最初はstart=1で全件数を取得
-    apiParams.append('start', 1);
-    
-    // オプションパラメータの追加
-    if (params.keyword) {
-        apiParams.append('keyword', params.keyword);
-    }
-    
-    if (params.budget) {
-        apiParams.append('budget', params.budget);
-    }
-    
-    // ランチ営業店に絞り込むパラメータ
-    if (params.timeSlot === 'lunch') {
-        apiParams.append('lunch', '1');
-    }
-    
-    // キャッシュ無効化パラメータを追加（現在時刻のミリ秒をランダム値として使用）
-    const timestamp = Date.now();
-    apiParams.append('timestamp', timestamp);
-    
-    // ホットペッパーAPIの完全なURL
-    const hotpepperUrl = `${baseUrl}?${apiParams.toString()}`;
-    
-    // CORS Anywhereプロキシ経由のURL
-    const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(hotpepperUrl)}`;
-    
-    // デバッグ用：APIキーとリクエストURLをコンソールに出力
-    console.log('🔑 APIキー:', apiKey);
-    console.log('🌐 ホットペッパーAPI URL:', hotpepperUrl);
-    console.log('🔄 CORS AnywhereプロキシURL:', proxyUrl);
-    console.log('📋 APIパラメータ:', Object.fromEntries(apiParams));
-    
-    try {
-        const response = await fetch(proxyUrl);
-        
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        
-        // CORS Anywhereプロキシ経由で直接APIレスポンスを取得
-        const apiResponse = await response.json();
-        console.log('📋 CORS Anywhere経由で取得したAPIレスポンス:', apiResponse);
-        
-        // エラーチェック
-        if (apiResponse.results.error) {
-            throw new Error(apiResponse.results.error[0].message);
-        }
-        
-        // 全件数を取得（最大1000件に制限）
-        let totalAvailable = apiResponse.results.results_available || 0;
-        const MAX_TOTAL_AVAILABLE = 1000; // Hot Pepper APIの制限を考慮
-        if (totalAvailable > MAX_TOTAL_AVAILABLE) {
-            console.log(`📊 API全件数: ${totalAvailable} → ${MAX_TOTAL_AVAILABLE}に制限`);
-            totalAvailable = MAX_TOTAL_AVAILABLE;
-        } else {
-            console.log('📊 API全件数:', totalAvailable);
-        }
-        
-        let restaurants = apiResponse.results.shop || [];
-        
-        // 全件数が取得件数より多い場合、ランダムなstart位置で再リクエスト
-        if (totalAvailable > maxCount) {
-            console.log('🎲 全件数が取得件数より多いため、ランダムなstart位置で再リクエスト');
-            
-            // start位置のランダム化: 1から(総件数-3)の間のランダムな整数値
-            // 最後の3件まで確実に取得できるようにする
-            const maxStartPosition = Math.max(1, totalAvailable - 3);
-            const randomStart = Math.floor(Math.random() * maxStartPosition) + 1;
-            
-            console.log('🎲 ランダム開始位置:', randomStart, '(範囲: 1～', maxStartPosition, ', 全件数:', totalAvailable, ')');
-            
-            // 新しいAPIパラメータで再リクエスト
-            const newApiParams = new URLSearchParams({
-                key: apiKey,
-                lat: currentLocation.lat,
-                lng: currentLocation.lng,
-                range: params.range,
-                count: maxCount,
-                format: 'json',
-                start: randomStart
-            });
-            
-            // オプションパラメータの追加
-            if (params.keyword) {
-                newApiParams.append('keyword', params.keyword);
-            }
-            if (params.budget) {
-                newApiParams.append('budget', params.budget);
-            }
-            if (params.timeSlot === 'lunch') {
-                newApiParams.append('lunch', '1');
-            }
-            
-            // キャッシュ無効化パラメータを追加（再リクエスト時も新しいタイムスタンプ）
-            const newTimestamp = Date.now();
-            newApiParams.append('timestamp', newTimestamp);
-            
-            const newHotpepperUrl = `${baseUrl}?${newApiParams.toString()}`;
-            const newProxyUrl = `https://corsproxy.io/?${encodeURIComponent(newHotpepperUrl)}`;
-            
-            console.log('🔄 再リクエストURL:', newProxyUrl);
-            
-            const newResponse = await fetch(newProxyUrl);
-            if (!newResponse.ok) {
-                throw new Error(`HTTP error! status: ${newResponse.status}`);
-            }
-            
-            const newApiResponse = await newResponse.json();
-            
-            if (newApiResponse.results.error) {
-                throw new Error(newApiResponse.results.error[0].message);
-            }
-            
-            restaurants = newApiResponse.results.shop || [];
-            console.log('📋 再リクエスト結果:', restaurants.length, '件取得');
-        }
-        
-        if (restaurants.length === 0) {
-            throw new Error('指定した条件でお店が見つかりませんでした。');
-        }
-        
-        // 予算コードと営業時間でフィルタリング
-        const filteredRestaurants = filterRestaurants(restaurants, params);
-        
-        if (filteredRestaurants.length === 0) {
-            throw new Error('指定した条件（予算・営業時間）に合うお店が見つかりませんでした。');
-        }
-        
-        // ランダムに3件選択
-        return getRandomRestaurants(filteredRestaurants, 3);
-        
-    } catch (error) {
-        console.error('API呼び出しエラー:', error);
-        throw error;
-    }
 }
 
 
-// レストランのフィルタリング（予算コードと営業時間）
+// レストランのフィルタリング（予算のみ、営業時間はAPI側で処理）
 function filterRestaurants(restaurants, params) {
     let filtered = [...restaurants];
     
@@ -357,52 +361,6 @@ function filterRestaurants(restaurants, params) {
         totalRestaurants: restaurants.length, 
         params: params 
     });
-    
-    // 時間帯の決定：フォームから取得したtimeSlotの値をselectedTimeとして使用
-    const timeSlotSelect = document.getElementById('timeSlot');
-    const selectedTime = timeSlotSelect ? timeSlotSelect.value : 'dinner';
-    
-    console.log('🎯 選択された時間帯:', selectedTime);
-    
-    // 予算コードでフィルタリング
-    if (params.budget) {
-        console.log('💰 予算フィルタリング:', params.budget);
-
-        filtered = filtered.filter(restaurant => {
-            let budgetMatch = true; // デフォルトは通過
-
-            if (selectedTime === 'lunch') {
-                // ランチ：データがある場合のみ厳密一致、無い場合は除外しない
-                if (restaurant.lunch && (restaurant.lunch.code || restaurant.lunch.average)) {
-                    if (restaurant.lunch.code) {
-                        budgetMatch = restaurant.lunch.code === params.budget;
-                        console.log(`🍽️ ランチ予算チェック: ${restaurant.name} - ${restaurant.lunch.code} === ${params.budget} = ${budgetMatch}`);
-                    } else {
-                        // averageのみある場合は通過（範囲比較実装がないため）
-                        budgetMatch = true;
-                        console.log(`🍽️ ランチ平均予算のみ存在: ${restaurant.name} - ${restaurant.lunch.average}`);
-                    }
-                } else {
-                    // ランチ予算情報が無い→緩和して通過
-                    budgetMatch = true;
-                    console.log(`🍽️ ランチ予算情報なし（緩和通過）: ${restaurant.name}`);
-                }
-            } else {
-                // ディナー：従来通りコード一致
-                if (restaurant.budget && restaurant.budget.code) {
-                    budgetMatch = restaurant.budget.code === params.budget;
-                    console.log(`🍽️ ディナー予算チェック: ${restaurant.name} - ${restaurant.budget.code} === ${params.budget} = ${budgetMatch}`);
-                } else {
-                    budgetMatch = false;
-                    console.log(`🍽️ ディナー予算情報なし: ${restaurant.name}`);
-                }
-            }
-
-            return budgetMatch;
-        });
-
-        console.log('💰 予算コードフィルタリング後:', filtered.length);
-    }
     
     // 厳密な予算フィルタリング（minBudget/maxBudgetによる絞り込み）
     if (params.minBudget !== undefined && params.maxBudget !== undefined) {
@@ -414,19 +372,13 @@ function filterRestaurants(restaurants, params) {
             console.log('💰 厳密な予算フィルタリング:', { minBudget, maxBudget });
             
             filtered = filtered.filter(restaurant => {
+                // Google Maps Places APIのprice_levelを金額に変換
                 let averageBudget = null;
                 
-                // 時間帯に基づいて平均金額を取得
-                if (selectedTime === 'lunch') {
-                    // ランチの場合：ランチ平均金額を使用
-                    if (restaurant.lunch && restaurant.lunch.average) {
-                        averageBudget = parseInt(restaurant.lunch.average);
-                    }
-                } else {
-                    // ディナーの場合：ディナー平均金額を使用
-                    if (restaurant.budget && restaurant.budget.average) {
-                        averageBudget = parseInt(restaurant.budget.average);
-                    }
+                if (restaurant.price_level !== null && restaurant.price_level !== undefined) {
+                    // price_level: 0=～500円, 1=500～1000円, 2=1000～2000円, 3=2000～4000円, 4=4000円～
+                    const priceRanges = [500, 1000, 2000, 4000, 8000];
+                    averageBudget = priceRanges[restaurant.price_level] || null;
                 }
                 
                 // 平均金額が取得できない場合はスキップ（除外しない）
@@ -446,24 +398,6 @@ function filterRestaurants(restaurants, params) {
         }
     }
     
-    // 現在営業中の店舗のみをフィルタリング
-    filtered = filtered.filter(restaurant => {
-        let isOpen = isCurrentlyOpen(restaurant);
-        
-        // ランチ検索時の緩和: これから1時間以内に開店する店舗も通過させる
-        if (!isOpen && selectedTime === 'lunch') {
-            const willOpenSoon = isOpeningWithinOneHour(restaurant);
-            if (willOpenSoon) {
-                console.log(`🍽️ ランチ検索緩和: ${restaurant.name} - 1時間以内に開店予定`);
-                isOpen = true;
-            }
-        }
-        
-        console.log(`🕐 営業時間チェック: ${restaurant.name} - ${isOpen ? '営業中' : '営業時間外'}`);
-        return isOpen;
-    });
-    
-    console.log('🕐 営業時間フィルタリング後:', filtered.length);
     console.log('✅ 最終フィルタリング結果:', filtered.length);
     
     return filtered;
@@ -617,88 +551,30 @@ function getRandomRestaurants(restaurants, count) {
 
 // アクセス情報を解析して駅名と徒歩時間を抽出
 function parseAccessInfo(restaurant) {
-    // アクセス情報のフィールドを確認（複数の可能性を試行）
-    const accessInfo = restaurant.mobile_access || restaurant.access || restaurant.walk;
-    
-    if (!accessInfo) {
-        return 'アクセス情報なし';
+    // Google Maps Places APIのvicinity（住所）を表示
+    if (restaurant.address) {
+        return restaurant.address;
     }
     
-    // 正規表現で駅名と徒歩時間を抽出
-    // パターン1: 「(駅名)より徒歩(X分)」
-    // パターン2: 「(駅名)から徒歩(X分)」
-    const patterns = [
-        /(.+?)より徒歩(\d+)分/,
-        /(.+?)から徒歩(\d+)分/,
-        /(.+?)駅より徒歩(\d+)分/,
-        /(.+?)駅から徒歩(\d+)分/
-    ];
-    
-    for (const pattern of patterns) {
-        const match = accessInfo.match(pattern);
-        if (match) {
-            const stationName = match[1].trim();
-            const walkTime = match[2];
-            return `${stationName}から徒歩${walkTime}分`;
-        }
-    }
-    
-    // パターンにマッチしない場合は元の情報をそのまま表示
-    return accessInfo;
+    return 'アクセス情報なし';
 }
 
 // 予算情報を取得（ランチ/ディナー対応）
 function getBudgetInfo(restaurant, selectedTime) {
     console.log('🔍 予算情報取得:', { restaurant, selectedTime });
 
-    // ヘルパー: ディナー予算テキスト（必要なら注釈を付与）
-    const buildDinnerText = (text) => `${text} (夜の目安)`;
+    // Google Maps Places APIのprice_levelから予算情報を取得
+    if (restaurant.price_level !== null && restaurant.price_level !== undefined) {
+        const priceNames = ['～500円', '500円～1000円', '1000円～2000円', '2000円～4000円', '4000円～'];
+        const priceName = priceNames[restaurant.price_level] || '価格情報なし';
+        console.log('💰 価格レベル:', restaurant.price_level, '-', priceName);
+        return priceName;
+    }
 
-    if (selectedTime === 'lunch') {
-        // ランチ：まずランチ予算を優先
-        if (restaurant.lunch && restaurant.lunch.average) {
-            console.log('🍽️ ランチ平均予算:', restaurant.lunch.average);
-            return `平均: ${restaurant.lunch.average}円`;
-        }
-        if (restaurant.lunch && restaurant.lunch.code) {
-            console.log('🍽️ ランチ予算コード:', restaurant.lunch.code);
-            return `予算: ${restaurant.lunch.code}`;
-        }
-        if (restaurant.lunch && restaurant.lunch.name) {
-            console.log('🍽️ ランチ予算名:', restaurant.lunch.name);
-            return restaurant.lunch.name;
-        }
-
-        // ランチ情報が無い場合はディナー予算を代替表示（注釈付き）
-        if (restaurant.budget && restaurant.budget.average) {
-            const text = `平均: ${restaurant.budget.average}円`;
-            console.log('🌙 代替ディナー平均予算:', text);
-            return buildDinnerText(text);
-        }
-        if (restaurant.budget && restaurant.budget.code) {
-            const text = `予算: ${restaurant.budget.code}`;
-            console.log('🌙 代替ディナー予算コード:', text);
-            return buildDinnerText(text);
-        }
-        if (restaurant.budget && restaurant.budget.name) {
-            const text = restaurant.budget.name;
-            console.log('🌙 代替ディナー予算名:', text);
-            return buildDinnerText(text);
-        }
-    } else {
-        // ディナー：そのままディナー予算
-        if (restaurant.budget && restaurant.budget.average) {
-            console.log('🍽️ ディナー平均予算:', restaurant.budget.average);
-            return `平均: ${restaurant.budget.average}円`;
-        }
-        if (restaurant.budget && restaurant.budget.code) {
-            console.log('🍽️ ディナー予算コード:', restaurant.budget.code);
-            return `予算: ${restaurant.budget.code}`;
-        }
-        if (restaurant.budget && restaurant.budget.name) {
-            console.log('🍽️ ディナー予算名:', restaurant.budget.name);
-            return restaurant.budget.name;
-        }
+    // フォールバック: budget.nameがある場合
+    if (restaurant.budget && restaurant.budget.name) {
+        console.log('💰 予算名:', restaurant.budget.name);
+        return restaurant.budget.name;
     }
 
     console.log('⚠️ 予算情報が見つかりません');
@@ -728,6 +604,12 @@ function displayResults(restaurants) {
         const accessInfo = parseAccessInfo(restaurant);
         const budgetInfo = getBudgetInfo(restaurant, selectedTime);
         
+        // Google Mapリンクの構築
+        let googleMapUrl = '';
+        if (restaurant.place_id) {
+            googleMapUrl = `https://www.google.com/maps/search/?api=1&query=Google&query_place_id=${restaurant.place_id}`;
+        }
+        
         // ホットペッパーグルメの店舗ページURLを取得
         const shopUrl = restaurant.urls?.pc || restaurant.urls?.sp || restaurant.url || '';
         
@@ -736,13 +618,20 @@ function displayResults(restaurants) {
             selectedTime: selectedTime,
             budgetInfo: budgetInfo,
             shopUrl: shopUrl,
+            googleMapUrl: googleMapUrl,
+            place_id: restaurant.place_id,
             restaurantData: restaurant
         });
         
-        // 店舗名をリンクにする（URLがある場合）
-        const restaurantNameHTML = shopUrl 
-            ? `<a href="${shopUrl}" target="_blank" rel="noopener noreferrer" class="restaurant-link">${restaurant.name}</a>`
+        // 店舗名をGoogle Mapリンクにする（place_idがある場合）
+        const restaurantNameHTML = googleMapUrl 
+            ? `<a href="${googleMapUrl}" target="_blank" rel="noopener noreferrer" class="restaurant-link">${restaurant.name}</a>`
             : restaurant.name;
+        
+        // 住所もGoogle Mapリンクにする（place_idがある場合）
+        const addressHTML = googleMapUrl
+            ? `<a href="${googleMapUrl}" target="_blank" rel="noopener noreferrer" class="restaurant-link">${restaurant.address}</a>`
+            : restaurant.address;
         
         return `
         <div class="restaurant-card">
@@ -750,7 +639,7 @@ function displayResults(restaurants) {
             <div class="restaurant-info">
                 <div class="info-item">
                     <span>📍</span>
-                    <span>${restaurant.address}</span>
+                    <span>${addressHTML}</span>
                 </div>
                 <div class="info-item">
                     <span>💰</span>
@@ -795,13 +684,13 @@ function hideError() {
     errorMessage.classList.add('hidden');
 }
 
-// デバッグ用：APIキーの設定確認
-function checkApiKey() {
-    if (apiKey === 'YOUR_API_KEY_HERE') {
-        console.warn('⚠️ APIキーが設定されていません。ホットペッパーグルメAPIのキーを設定してください。');
-        console.log('APIキーの取得方法: https://webservice.recruit.co.jp/');
+// Google Maps JavaScript APIの読み込み確認
+function checkGoogleMapsAPI() {
+    if (typeof google === 'undefined' || !google.maps || !google.maps.places) {
+        console.warn('⚠️ Google Maps JavaScript APIが読み込まれていません。');
+        console.log('index.htmlでGoogle Maps JavaScript APIが正しく読み込まれているか確認してください。');
+        return false;
     }
+    console.log('✅ Google Maps JavaScript APIが正常に読み込まれています。');
+    return true;
 }
-
-// ページ読み込み時にAPIキーをチェック
-checkApiKey();
