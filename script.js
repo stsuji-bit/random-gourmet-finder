@@ -4,6 +4,29 @@ let currentLocation = null;
 // DOM要素の変数（後で初期化）
 let locationStatus, searchButton, searchForm, resultsContainer, loading, errorMessage, errorText;
 
+// Google Maps APIキー（Place Photos用）
+let googleMapsApiKey = null;
+function getGoogleMapsApiKey() {
+    if (googleMapsApiKey) return googleMapsApiKey;
+    try {
+        const scripts = document.getElementsByTagName('script');
+        for (let i = 0; i < scripts.length; i++) {
+            const src = scripts[i].getAttribute('src');
+            if (src && src.includes('maps.googleapis.com/maps/api/js')) {
+                const url = new URL(src, window.location.origin);
+                const key = url.searchParams.get('key');
+                if (key) {
+                    googleMapsApiKey = key;
+                    return googleMapsApiKey;
+                }
+            }
+        }
+    } catch (e) {
+        console.warn('Google Maps APIキーの取得に失敗しました:', e);
+    }
+    return null;
+}
+
 // Google Maps APIの読み込み完了時のコールバック
 // この関数はGoogle Maps APIが読み込まれる前に定義される必要がある
 // グローバルスコープで直接定義することで、callbackパラメータから呼び出せるようにする
@@ -274,6 +297,14 @@ function convertPlacesToRestaurants(places) {
             place.opening_hours.weekday_text : [],
         // 店舗タイプを保存（ランチフィルタリング用）
         types: place.types || [],
+        // 写真（Place Photos）の参照を保存
+        photo_reference: (place.photos && place.photos.length > 0 && place.photos[0].photo_reference) ? place.photos[0].photo_reference : null,
+        photo_url: (function() {
+            const ref = (place.photos && place.photos.length > 0 && place.photos[0].photo_reference) ? place.photos[0].photo_reference : null;
+            const key = getGoogleMapsApiKey();
+            if (!ref || !key) return null;
+            return `https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photoreference=${ref}&key=${key}`;
+        })(),
         url: place.url || '',
         urls: {
             pc: place.url || '',
@@ -324,7 +355,9 @@ async function searchRestaurants(params) {
         const request = {
             location: location,
             radius: radius,
-            type: 'restaurant'
+            type: 'restaurant',
+            // 必要なフィールドを明示的に指定（photosを含む）
+            fields: ['name', 'rating', 'geometry', 'photos', 'place_id', 'vicinity', 'price_level', 'opening_hours']
         };
         
         // キーワードの追加
@@ -351,6 +384,7 @@ async function searchRestaurants(params) {
         // すべての検索結果を保存する配列
         let allRestaurants = [];
         let currentPage = 1;
+        const maxPages = 3;
         
         // コールバック関数を定義（ページネーションに対応）
         const searchCallback = (results, status, pagination) => {
@@ -363,7 +397,7 @@ async function searchRestaurants(params) {
                     if (currentPage === 1) {
                         reject(new Error('指定した条件でお店が見つかりませんでした。検索範囲を広げるか、条件を変更してお試しください。'));
                     } else {
-                        console.warn('⚠️ 2ページ目が空でした。1ページ目の結果のみを使用します。');
+                        console.warn(`⚠️ ${currentPage}ページ目が空でした。これまでの結果のみを使用します。`);
                         processAndResolve(allRestaurants, params, resolve, reject);
                     }
                     return;
@@ -374,16 +408,13 @@ async function searchRestaurants(params) {
                 allRestaurants = allRestaurants.concat(pageRestaurants);
                 console.log(`🏪 ${currentPage}ページ目のレストラン:`, pageRestaurants.length, '件');
                 
-                // next_page_tokenがあるかチェック（Google Maps JavaScript APIではpagination.hasNextPageを使用）
-                if (pagination && pagination.hasNextPage && currentPage === 1) {
-                    console.log('📄 次のページが存在します。2ページ目を取得します...');
-                    currentPage = 2;
-                    
-                    // next_page_tokenが有効になるまで少し待つ（APIの仕様）
+                // 次ページの取得判定（最大3ページまで、500msディレイ）
+                if (pagination && pagination.hasNextPage && currentPage < maxPages) {
+                    console.log(`📄 次のページが存在します。${currentPage + 1}ページ目を取得します...`);
+                    currentPage += 1;
                     setTimeout(() => {
-                        // 2回目のリクエストを実行（pagination.nextPage()を呼び出すと同じコールバックが再度呼ばれる）
                         pagination.nextPage();
-                    }, 1000); // 1秒待機（next_page_tokenが有効になるまで）
+                    }, 500);
                 } else {
                     console.log(`📄 ページ取得完了。合計レストラン: ${allRestaurants.length}件`);
                     // すべての結果に対してフィルタリングとランダム抽出を実行
@@ -394,7 +425,7 @@ async function searchRestaurants(params) {
                 if (currentPage === 1) {
                     reject(new Error('指定した条件でお店が見つかりませんでした。検索範囲を広げるか、条件を変更してお試しください。'));
                 } else {
-                    console.warn('⚠️ 2ページ目でエラーが発生しました。1ページ目の結果のみを使用します。');
+                    console.warn(`⚠️ ${currentPage}ページ目でゼロ結果。これまでの結果のみを使用します。`);
                     processAndResolve(allRestaurants, params, resolve, reject);
                 }
             } else if (status === google.maps.places.PlacesServiceStatus.REQUEST_DENIED) {
@@ -405,7 +436,7 @@ async function searchRestaurants(params) {
                 if (currentPage === 1) {
                     reject(new Error(`Google Maps API エラー: ${status}`));
                 } else {
-                    console.warn(`⚠️ 2ページ目でエラーが発生しました（${status}）。1ページ目の結果のみを使用します。`);
+                    console.warn(`⚠️ ${currentPage}ページ目でエラーが発生しました（${status}）。これまでの結果のみを使用します。`);
                     processAndResolve(allRestaurants, params, resolve, reject);
                 }
             }
@@ -670,6 +701,9 @@ function displayResults(restaurants) {
         // ホットペッパーグルメの店舗ページURLを取得
         const shopUrl = restaurant.urls?.pc || restaurant.urls?.sp || restaurant.url || '';
         
+        // 構築された画像URLのデバッグ出力
+        console.log('🖼️ 構築された画像URL:', restaurant.photo_url);
+        
         console.log(`🏪 レストラン${index + 1}:`, {
             name: restaurant.name,
             selectedTime: selectedTime,
@@ -690,8 +724,14 @@ function displayResults(restaurants) {
             ? `<a href="${googleMapUrl}" target="_blank" rel="noopener noreferrer" class="restaurant-link">${restaurant.address}</a>`
             : restaurant.address;
         
+        // 店舗写真（Place Photos）がある場合のみ表示
+        const photoHTML = restaurant.photo_url
+            ? `<div class="restaurant-photo-wrapper"><img src="${restaurant.photo_url}" alt="${restaurant.name}" style="width:100%;height:auto;border-radius:8px;display:block;object-fit:cover;" /></div>`
+            : '';
+        
         return `
         <div class="restaurant-card">
+            ${photoHTML}
             <div class="restaurant-name">${restaurantNameHTML}</div>
             <div class="restaurant-info">
                 <div class="info-item">
